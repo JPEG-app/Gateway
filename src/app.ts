@@ -2,6 +2,7 @@ import express, { Application } from 'express';
 import bodyParser from 'body-parser';
 import { setupRoutes } from './routes/routes';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 
 export class App {
   public app: Application;
@@ -21,7 +22,7 @@ export class App {
     const corsOptions: cors.CorsOptions = {
       origin: function (origin, callback) {
         if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) !== -1) {
+        if (allowedOrigins.includes(origin)) {
           callback(null, true);
         } else {
           callback(new Error('Not allowed by CORS'));
@@ -29,6 +30,18 @@ export class App {
       },
       credentials: true
     };
+    this.app.use(cors(corsOptions));
+
+    this.app.set('trust proxy', 1); 
+
+    const limiter = rateLimit({
+      windowMs: 15 * 60 * 1000,
+      max: 100,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: 'Too many requests, please try again later.' },
+    });
+    this.app.use(limiter);
     this.app.use(bodyParser.json());
     this.app.use(bodyParser.urlencoded({ extended: true }));
   }
