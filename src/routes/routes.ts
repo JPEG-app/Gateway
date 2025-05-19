@@ -1,9 +1,11 @@
 import { Router, Request as ExpressRequest, Response as ExpressResponse, NextFunction } from 'express';
-import { createProxyMiddleware, Options } from 'http-proxy-middleware';
+import { createProxyMiddleware, Options as ProxyOptions, fixRequestBody } from 'http-proxy-middleware';
 import { ClientRequest, IncomingMessage, ServerResponse as HttpServerResponse } from 'http';
 import { Socket } from 'net';
 import * as dotenv from 'dotenv';
 import mcache from 'memory-cache';
+import winston from 'winston';
+import { RequestWithId } from '../utils/logger';
 
 dotenv.config();
 
@@ -13,35 +15,31 @@ const FEED_SERVICE_URL: string = process.env.FEED_API_URL || "http://feed-servic
 
 const router: Router = Router();
 
-const logRequest = (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
-  console.log(`[GATEWAY] ${new Date().toISOString()} - ${req.method} ${req.originalUrl} from ${req.ip}`);
-  next();
-};
+const CACHE_DURATION_MS = process.env.GATEWAY_CACHE_DURATION_MS ? parseInt(process.env.GATEWAY_CACHE_DURATION_MS) : 5 * 60 * 1000;
 
-// --- Caching Middleware ---
-const CACHE_DURATION_MS = 5 * 60 * 1000;
-
-const cacheMiddleware = (duration: number) => {
+const cacheMiddleware = (logger: winston.Logger, duration: number) => {
   return (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
+    const typedReq = req as RequestWithId;
+    const correlationId = typedReq.id;
+
     if (req.method !== 'GET') {
       return next();
     }
-
-    const key = '__express__' + req.originalUrl || req.url;
+    const key = '__gateway_cache__' + req.originalUrl || req.url; 
     const cachedBody = mcache.get(key);
-
     if (cachedBody) {
-      console.log(`[GATEWAY CACHE] HIT for ${key}`);
+      logger.info(`[GATEWAY CACHE] HIT`, { correlationId, cacheKey: key, type: 'GatewayCacheLog.Hit' });
       res.setHeader('X-Cache', 'HIT');
+      res.setHeader('Content-Type', 'application/json');
       res.send(cachedBody);
       return;
     } else {
-      console.log(`[GATEWAY CACHE] MISS for ${key}`);
+      logger.info(`[GATEWAY CACHE] MISS`, { correlationId, cacheKey: key, type: 'GatewayCacheLog.Miss' });
       res.setHeader('X-Cache', 'MISS');
       const originalSend = res.send.bind(res);
       res.send = (body: any): ExpressResponse => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
-          console.log(`[GATEWAY CACHE] PUT for ${key}, duration: ${duration}ms`);
+          logger.info(`[GATEWAY CACHE] PUT`, { correlationId, cacheKey: key, durationMs: duration, type: 'GatewayCacheLog.Put' });
           mcache.put(key, body, duration);
         }
         return originalSend(body);
@@ -50,83 +48,105 @@ const cacheMiddleware = (duration: number) => {
     }
   };
 };
-// --- End Caching Middleware ---
 
-const commonProxyOptions: Options = {
+const createCommonProxyOptions = (logger: winston.Logger, targetService: string, targetUrl: string): ProxyOptions => ({
+  target: targetUrl,
   changeOrigin: true,
   on: {
     proxyReq: (proxyReq: ClientRequest, req: IncomingMessage, res: HttpServerResponse) => {
-      const expressReq = req as ExpressRequest;
-      console.log(`[GATEWAY] Proxying ${expressReq.method} ${expressReq.originalUrl} to ${proxyReq.protocol}//${proxyReq.host}${proxyReq.path}`);
-      if (expressReq.body && Object.keys(expressReq.body).length > 0 && expressReq.method !== 'GET' && expressReq.method !== 'HEAD') {
-        const bodyData = JSON.stringify(expressReq.body);
-        proxyReq.setHeader('Content-Type', 'application/json');
-        proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
-        proxyReq.write(bodyData);
+      const expressReq = req as RequestWithId; 
+      const correlationId = expressReq.id;
+      if (correlationId) proxyReq.setHeader('X-Correlation-ID', correlationId);
+      if (expressReq.headers.authorization) proxyReq.setHeader('Authorization', expressReq.headers.authorization);
+      
+      if (expressReq.body && (expressReq.method === 'POST' || expressReq.method === 'PUT' || expressReq.method === 'PATCH')) {
+        fixRequestBody(proxyReq, req);
       }
+
+      logger.info(`Gateway: Proxying request`, {
+        correlationId, method: expressReq.method, originalUrl: expressReq.originalUrl,
+        targetService, targetUrlProxied: `${proxyReq.protocol}//${proxyReq.host}${proxyReq.path}`, 
+        type: 'GatewayProxyLog.Proxying'
+      });
     },
     proxyRes: (proxyRes: IncomingMessage, req: IncomingMessage, res: HttpServerResponse) => {
-      const expressReq = req as ExpressRequest;
-      console.log(`[GATEWAY] Received ${proxyRes.statusCode} for ${expressReq.method} ${expressReq.originalUrl} from target`);
+      const expressReq = req as RequestWithId;
+      const correlationId = expressReq.id;
+      const requestHandlingTime = Date.now() - (expressReq.startTime || Date.now());
+      logger.info(`Gateway: Received response from downstream service`, {
+        correlationId, method: expressReq.method, originalUrl: expressReq.originalUrl,
+        targetService, statusCode: proxyRes.statusCode, statusMessage: proxyRes.statusMessage,
+        requestHandlingTimeMsAtProxyRes: requestHandlingTime, type: 'GatewayProxyLog.Response'
+      });
     },
     error: (err: Error, req: IncomingMessage, res: HttpServerResponse | Socket, target?: any) => {
+      const expressReq = req as RequestWithId;
+      const correlationId = expressReq.id;
       const nodeErr = err as NodeJS.ErrnoException;
-      let targetDisplay = 'unknown target';
-      if (target) {
-        if (typeof target === 'string') {
-            targetDisplay = target;
-        } else if (typeof target === 'object' && target !== null) {
-            targetDisplay = target.href || target.host || target.hostname || JSON.stringify(target);
-        }
-      }
-      console.error(`[GATEWAY] Proxy error for ${targetDisplay}:`, err.message);
-
+      let targetDisplay = (target && typeof target === 'object' && target.href) ? target.href : (typeof target === 'string' ? target : 'unknown target');
+      logger.error(`Gateway: Proxy error`, {
+        correlationId, targetService, targetUrl: targetDisplay, errorMessage: err.message,
+        errorCode: nodeErr.code, stack: err.stack, type: 'GatewayProxyLog.Error'
+      });
       if (res instanceof HttpServerResponse) {
         const expressRes = res as ExpressResponse;
         if (!expressRes.headersSent) {
-          if (nodeErr.code === 'ECONNREFUSED' || nodeErr.code === 'ENOTFOUND') {
-            expressRes.status(503).json({ error: 'Service unavailable', details: err.message });
-          } else if (nodeErr.code === 'ETIMEDOUT' || nodeErr.code === 'ECONNRESET') {
-            expressRes.status(504).json({ error: 'Gateway timeout', details: err.message });
-          } else {
-            expressRes.status(500).json({ error: 'Gateway proxy error', details: err.message });
-          }
-        } else if (!expressRes.writableEnded) {
-          expressRes.end();
-        }
-      } else if (res instanceof Socket) {
-        if (!res.destroyed) {
-            res.destroy(err);
-        }
-      }
+          let statusCode = 500, message = 'Gateway proxy error';
+          if (nodeErr.code === 'ECONNREFUSED' || nodeErr.code === 'ENOTFOUND') { statusCode = 503; message = 'Service unavailable'; }
+          else if (nodeErr.code === 'ETIMEDOUT' || nodeErr.code === 'ECONNRESET') { statusCode = 504; message = 'Gateway timeout'; }
+          expressRes.status(statusCode).json({ error: message, details: err.message, correlationId });
+        } else if (!expressRes.writableEnded) expressRes.end();
+      } else if (res instanceof Socket && !res.destroyed) res.destroy(err);
     },
   }
-};
+});
 
-export const setupRoutes = (): Router => {
-  router.use(logRequest);
+export const setupRoutes = (logger: winston.Logger): Router => {
 
-  const authProxyOptions: Options = { ...commonProxyOptions, target: USER_SERVICE_URL, pathRewrite: { '^/auth': '/auth' } };
-  router.use('/auth', createProxyMiddleware(authProxyOptions));
+  router.use(['/auth', '/api/v1/auth'], createProxyMiddleware({
+    ...createCommonProxyOptions(logger, 'UserService(Auth)', USER_SERVICE_URL),
+    pathRewrite: (path, req) => { 
+        return '/auth' + path;
+    }
+  }));
 
-  const usersProxyOptions: Options = { ...commonProxyOptions, target: USER_SERVICE_URL, pathRewrite: { '^/users': '/users' } };
-  router.use('/users', createProxyMiddleware(usersProxyOptions));
-  
-  const userPostsProxyOptions: Options = { ...commonProxyOptions, target: POST_SERVICE_URL };
-  router.use('/users/:userId/posts', createProxyMiddleware(userPostsProxyOptions));
-
-  const postsProxyOptions: Options = { ...commonProxyOptions, target: POST_SERVICE_URL, pathRewrite: { '^/posts': '/posts' } };
-  router.use('/posts', createProxyMiddleware(postsProxyOptions));
-
-  const feedProxy = createProxyMiddleware({
-    ...commonProxyOptions,
-    target: FEED_SERVICE_URL,
-    pathRewrite: { '^/feed': '/feed' },
+  router.use(['/users', '/api/v1/users'], (req, res, next) => {
+    if (req.originalUrl.match(/^\/(api\/v1\/)?users\/[^/]+\/posts/)) {
+      return next();
+    }
+    createProxyMiddleware({
+      ...createCommonProxyOptions(logger, 'UserService(Users)', USER_SERVICE_URL),
+      pathRewrite: (path, req) => '/users' + path
+    })(req, res, next);
   });
-  router.use('/feed', cacheMiddleware(CACHE_DURATION_MS), feedProxy);
+
+  router.use(['/users/:userId/posts', '/api/v1/users/:userId/posts'], createProxyMiddleware({
+    ...createCommonProxyOptions(logger, 'PostService(UserPosts)', POST_SERVICE_URL),
+    pathRewrite: (path, req) => {
+        const expressReq = req as ExpressRequest;
+        if (expressReq.originalUrl.startsWith('/api/v1/users/')) {
+            return expressReq.originalUrl.replace('/api/v1', '');
+        }
+        return expressReq.originalUrl;
+    }
+  }));
+
+  router.use(['/posts', '/api/v1/posts'], createProxyMiddleware({
+    ...createCommonProxyOptions(logger, 'PostService(Posts)', POST_SERVICE_URL),
+    pathRewrite: (path, req) => '/posts' + path
+  }));
+
+  router.use(['/feed', '/api/v1/feed'], cacheMiddleware(logger, CACHE_DURATION_MS), createProxyMiddleware({
+    ...createCommonProxyOptions(logger, 'FeedService', FEED_SERVICE_URL),
+    pathRewrite: (path, req) => '/feed' + path 
+  }));
 
   router.use((req: ExpressRequest, res: ExpressResponse) => {
-    res.status(404).json({ error: 'Not Found - No route matched in API Gateway' });
+    const typedReq = req as RequestWithId;
+    logger.warn('Route not found in API Gateway', {
+        correlationId: typedReq.id, method: req.method, url: req.originalUrl, type: 'GatewayRouteNotFound'
+    });
+    res.status(404).json({ error: 'Not Found - No route matched in API Gateway', correlationId: typedReq.id });
   });
 
   return router;
