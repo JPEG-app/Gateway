@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gateway-secret
+type: Opaque
+stringData:
+  NODE_ENV: "production"
+  PORT: "8000"
+  USER_API_URL: "http://user-service-service:3001"
+  POST_API_URL: "http://post-service-service:3002"
+  FEED_API_URL: "http://feed-service-service:3003"
+  LOG_LEVEL: "info"
+  SERVICE_NAME: "api-gateway"
+  GATEWAY_CACHE_DURATION_MS: "300000"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+      - name: gateway-service
+        image: dgeorgiev0348/gateway-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - secretRef:
+            name: gateway-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-service
+spec:
+  selector:
+    app: api-gateway
+  ports:
+  - protocol: TCP
+    port: 8000
+    targetPort: 8000
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-gateway-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+spec:
+  tls:
+  - hosts:
+    - gateway.local
+    secretName: gateway-tls-secret
+  rules:
+  - host: gateway.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: gateway-service-service
+            port:
+              number: 8000
