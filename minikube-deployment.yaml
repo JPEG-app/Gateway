@@ -40,14 +40,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: gateway-service
+  name: gateway-service 
 spec:
   selector:
     app: api-gateway
   ports:
   - protocol: TCP
-    port: 8000
-    targetPort: 8000
+    port: 8000 
+    targetPort: 8000 
   type: ClusterIP
 ---
 apiVersion: networking.k8s.io/v1
@@ -70,6 +70,25 @@ spec:
         pathType: Prefix
         backend:
           service:
-            name: gateway-service-service
+            name: gateway-service
             port:
               number: 8000
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gateway-deployment 
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
