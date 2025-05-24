@@ -103,6 +103,10 @@ const createCommonProxyOptions = (logger: winston.Logger, targetService: string,
 
 export const setupRoutes = (logger: winston.Logger): Router => {
 
+  router.get('/healthz', (req: ExpressRequest, res: ExpressResponse) => {
+    res.status(200).json({ status: 'UP', message: 'API Gateway is healthy' });
+  });
+
   router.use(['/auth', '/api/v1/auth'], createProxyMiddleware({
     ...createCommonProxyOptions(logger, 'UserService(Auth)', USER_SERVICE_URL),
     pathRewrite: (path, req) => { 
