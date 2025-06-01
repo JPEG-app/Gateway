@@ -1,0 +1,13 @@
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: gateway-hc-config
+spec:
+  healthCheck:
+    type: HTTP
+    requestPath: /healthz # Tell GCLB to use this path
+    port: 8000            # Port your gateway listens on
+    checkIntervalSec: 15  # How often to check
+    timeoutSec: 5         # How long to wait for a response
+    healthyThreshold: 2   # How many successes to be considered healthy
+    unhealthyThreshold: 3 # How many failures to be considered unhealthy
