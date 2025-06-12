@@ -36,6 +36,7 @@ export class App {
       credentials: true
     };
     this.app.use(cors(corsOptions));
+    this.app.options('*', cors(corsOptions));
 
     this.app.set('trust proxy', 1);
 
