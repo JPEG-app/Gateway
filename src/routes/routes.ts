@@ -9,9 +9,9 @@ import { RequestWithId } from '../utils/logger';
 
 dotenv.config();
 
-const USER_SERVICE_URL: string = process.env.USER_API_URL || "http://user-service:3001";
-const POST_SERVICE_URL: string = process.env.POST_API_URL || "http://post-service:3002";
-const FEED_SERVICE_URL: string = process.env.FEED_API_URL || "http://feed-service:3003";
+const USER_SERVICE_URL: string = process.env.USER_API_URL || "http://user-service-service:3001";
+const POST_SERVICE_URL: string = process.env.POST_API_URL || "http://post-service-service:3002";
+const FEED_SERVICE_URL: string = process.env.FEED_API_URL || "http://feed-service-service:3003";
 
 const router: Router = Router();
 
