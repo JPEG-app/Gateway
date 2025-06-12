@@ -65,8 +65,8 @@ kind: Service
 metadata:
   name: gateway-service
   annotations:
-    cloud.google.com/neg: '{"ingress": true}' # Keep this if it was there
-    cloud.google.com/backend-config: '{"ports": {"8000":"gateway-hc-config"}}' # Associate port 8000 with the BackendConfig
+    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/backend-config: '{"ports": {"8000":"gateway-hc-config"}}'
 spec:
   selector:
     app: api-gateway
@@ -74,22 +74,26 @@ spec:
   - protocol: TCP
     port: 8000
     targetPort: 8000
-  type: NodePort # Or ClusterIP if only accessed via Ingress
+  type: NodePort
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: gateway-cert
+spec:
+  domains:
+    - api.jpegapp.lol
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: api-gateway-ingress
+  name: gateway-ingress
   annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    networking.gke.io/managed-certificates: gateway-cert
+    kubernetes.io/ingress.global-static-ip-name: gateway-ip
 spec:
-  tls:
-  - hosts:
-    - jpeg.gateway
-    secretName: gateway-tls-secret
   rules:
-  - host: jpeg.gateway
+  - host: api.jpegapp.lol
     http:
       paths:
       - path: /
