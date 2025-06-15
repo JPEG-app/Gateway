@@ -12,7 +12,7 @@ dotenv.config();
 const USER_SERVICE_URL: string = process.env.USER_API_URL || "http://user-service-service:3001";
 const POST_SERVICE_URL: string = process.env.POST_API_URL || "http://post-service-service:3002";
 const FEED_SERVICE_URL: string = process.env.FEED_API_URL || "http://feed-service-service:3003";
-const MESSAGING_SERVICE_URL: string = process.env.MESSAGING_API_URL || "http://messaging-service-svc:4001";
+// const MESSAGING_SERVICE_URL: string = process.env.MESSAGING_API_URL || "http://messaging-service-svc:4001";
 
 const router: Router = Router();
 
@@ -146,23 +146,23 @@ export const setupRoutes = (logger: winston.Logger, server: HttpServer): Router 
     pathRewrite: (path, req) => '/feed' + path 
   }));
 
-  router.use(['/conversations', '/api/v1/conversations'], createProxyMiddleware({
-    ...createCommonProxyOptions(logger, 'MessagingService(API)', MESSAGING_SERVICE_URL),
-    pathRewrite: (path, req) => {
-        return path.replace(/^\/api\/v1/, '');
-    }
-  }));
+  // router.use(['/conversations', '/api/v1/conversations'], createProxyMiddleware({
+  //   ...createCommonProxyOptions(logger, 'MessagingService(API)', MESSAGING_SERVICE_URL),
+  //   pathRewrite: (path, req) => {
+  //       return path.replace(/^\/api\/v1/, '');
+  //   }
+  // }));
 
-  const wsProxy = createProxyMiddleware({
-    ...createCommonProxyOptions(logger, 'MessagingService(WS)', MESSAGING_SERVICE_URL),
-    ws: true,
-    pathRewrite: {
-      '^/ws': ''
-    }
-  });
-  router.use('/ws', wsProxy);
+  // const wsProxy = createProxyMiddleware({
+  //   ...createCommonProxyOptions(logger, 'MessagingService(WS)', MESSAGING_SERVICE_URL),
+  //   ws: true,
+  //   pathRewrite: {
+  //     '^/ws': ''
+  //   }
+  // });
+  // router.use('/ws', wsProxy);
 
-  server.on('upgrade', wsProxy.upgrade);
+  // server.on('upgrade', wsProxy.upgrade);
 
   router.use((req: ExpressRequest, res: ExpressResponse) => {
     const typedReq = req as RequestWithId;
