@@ -1,4 +1,5 @@
 import express, { Application, Request as ExpressRequest, Response, NextFunction } from 'express';
+import http from 'http';
 import bodyParser from 'body-parser';
 import { setupRoutes } from './routes/routes';
 import cors from 'cors';
@@ -7,9 +8,11 @@ import logger, { assignRequestId, requestLoggerMiddleware, logError, RequestWith
 
 export class App {
   public app: Application;
+  public server: http.Server;
 
   constructor() {
     this.app = express();
+    this.server = http.createServer(this.app);
     this.config();
     this.routes(); 
     this.errorHandling(); 
@@ -68,7 +71,7 @@ export class App {
   }
 
   private routes(): void {
-    this.app.use('/', setupRoutes(logger));
+    this.app.use('/', setupRoutes(logger, this.server));
   }
 
   private errorHandling(): void {
