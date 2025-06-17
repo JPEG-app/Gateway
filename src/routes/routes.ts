@@ -146,9 +146,7 @@ export const setupRoutes = (logger: winston.Logger, server: HttpServer): Router 
   
   router.use(['/search', '/api/v1/search'], cacheMiddleware(logger, CACHE_DURATION_MS), createProxyMiddleware({
     ...createCommonProxyOptions(logger, 'SearchService', SEARCH_SERVICE_URL),
-    pathRewrite: (path, req) => {
-        return path.replace(/^\/api\/v1/, '');
-    }
+    pathRewrite: (path, req) => '/search' + path
   }));
 
   router.use((req: ExpressRequest, res: ExpressResponse) => {
